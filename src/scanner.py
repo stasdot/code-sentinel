@@ -247,23 +247,36 @@ class CodeScanner:
 
 
 def scan(path: str, 
-         model: str = "codellama",
          client_type: str = "ollama",
          prompt_type: str = "standard",
-         verbose: bool = True) -> List[ScanResult]:
+         verbose: bool = True,
+         **client_kwargs) -> List[ScanResult]:
     """
     Main entry point for scanning.
     
     Args:
         path: Path to file or directory to scan
-        model: AI model to use
-        client_type: Type of AI client ('ollama', 'groq', etc.)
+        client_type: Type of AI client ('ollama', 'groq', 'huggingface')
         prompt_type: Prompt template type
         verbose: Show progress and results
+        **client_kwargs: Additional arguments for AI client (model, api_key, etc.)
         
     Returns:
         List of ScanResult objects
     """
+    # Set default models for each provider if not specified
+    if "model" not in client_kwargs:
+        default_models = {
+            "ollama": "codellama",
+            "groq": "llama-3.3-70b-versatile",
+            "huggingface": "mistralai/Mistral-7B-Instruct-v0.2",
+            "hf": "mistralai/Mistral-7B-Instruct-v0.2"
+        }
+        client_kwargs["model"] = default_models.get(client_type.lower(), "codellama")
+    
+    # Get model name for display
+    model = client_kwargs.get("model", "default")
+    
     # Create AI client
     if verbose:
         console.print(Panel.fit(
@@ -274,7 +287,11 @@ def scan(path: str,
             title="🛡️  Starting Scan"
         ))
     
-    ai_client = create_client(client_type, model=model)
+    try:
+        ai_client = create_client(client_type, **client_kwargs)
+    except ValueError as e:
+        console.print(f"[red]✗ Failed to create AI client: {e}[/red]")
+        return []
     
     # Test connection
     if verbose:
@@ -366,54 +383,3 @@ if __name__ == "__main__":
     
     path = sys.argv[1]
     results = scan(path)
-    
-    # Show a sample of results
-    if results:
-        console.print("\n[bold cyan]═══ Vulnerability Details ═══[/bold cyan]\n")
-        shown = 0
-        for result in results:
-            if result.success and result.vulnerabilities:
-                console.print(f"[bold underline]📄 {result.file_path}[/bold underline]")
-                console.print(f"[dim]Scanned in {result.scan_time:.2f}s with {result.model_used}[/dim]\n")
-                
-                for i, vuln in enumerate(result.vulnerabilities, 1):
-                    # Color based on severity
-                    if vuln.severity == Severity.CRITICAL:
-                        color = "bright_red"
-                        icon = "🔴"
-                    elif vuln.severity == Severity.HIGH:
-                        color = "red"
-                        icon = "🟠"
-                    elif vuln.severity == Severity.MEDIUM:
-                        color = "yellow"
-                        icon = "🟡"
-                    elif vuln.severity == Severity.LOW:
-                        color = "blue"
-                        icon = "🔵"
-                    else:
-                        color = "cyan"
-                        icon = "ℹ️"
-                    
-                    console.print(f"[bold]{i}. [{color}]{icon} {vuln.type}[/{color}][/bold]")
-                    console.print(f"   [dim]Severity:[/dim] [{color}]{vuln.severity.value.upper()}[/{color}]")
-                    if vuln.line:
-                        console.print(f"   [dim]Line:[/dim] {vuln.line}")
-                    if vuln.cwe_id:
-                        console.print(f"   [dim]CWE:[/dim] {vuln.cwe_id}")
-                    console.print(f"   [dim]Confidence:[/dim] {vuln.confidence:.0%}")
-                    console.print(f"\n   [bold]Description:[/bold]")
-                    console.print(f"   {vuln.description}")
-                    console.print(f"\n   [bold]Code Snippet:[/bold]")
-                    console.print(f"   [dim]{vuln.code_snippet}[/dim]")
-                    console.print(f"\n   [bold green]✓ Recommendation:[/bold green]")
-                    console.print(f"   {vuln.recommendation}\n")
-                
-                shown += 1
-                if shown >= 5:  # Limit to 5 files to avoid too much output
-                    remaining = len([r for r in results if r.success and r.vulnerabilities]) - shown
-                    if remaining > 0:
-                        console.print(f"[dim]... and {remaining} more files with vulnerabilities[/dim]\n")
-                    break
-        
-        if shown == 0:
-            console.print("[dim]No vulnerabilities found in scanned files.[/dim]\n")
