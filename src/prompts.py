@@ -1,73 +1,55 @@
 """
-Prompt templates for AI-powered security analysis.
+Prompt templates for AI-powered security analysis with structured JSON output.
 """
 
-SECURITY_ANALYSIS_PROMPT = """You are a security expert analyzing code for vulnerabilities.
+from .models import get_schema_description
 
-Analyze the following code from file "{filename}" and identify any security vulnerabilities.
+
+STRUCTURED_SECURITY_PROMPT = """You are a security expert. Analyze this code for vulnerabilities.
+
+File: {filename}
+Code:
+```
+{code}
+```
+
+RESPOND WITH ONLY JSON. NO OTHER TEXT. START WITH {{ and END WITH }}.
+
+Use this exact format:
+{schema}
+
+If no vulnerabilities found, return:
+{{"vulnerabilities": []}}
+
+JSON ONLY. NO EXPLANATIONS."""
+
+
+DETAILED_STRUCTURED_PROMPT = """Security analysis for: {filename}
 
 Code:
 ```
 {code}
 ```
 
-For each vulnerability found, provide:
-1. Type of vulnerability (e.g., SQL Injection, XSS, Path Traversal)
-2. Severity (critical, high, medium, low)
-3. Line number where the issue occurs
-4. Brief description of the issue
-5. Recommendation for fixing it
-6. CWE ID if applicable
+RETURN ONLY JSON. Format:
+{schema}
 
-If no vulnerabilities are found, state that the code appears secure.
+Analyze: input validation, injections, auth issues, crypto, data exposure.
 
-Be specific and actionable in your recommendations."""
+JSON ONLY. START WITH {{ END WITH }}"""
 
 
-DETAILED_ANALYSIS_PROMPT = """You are an expert security code reviewer. Analyze this code for security vulnerabilities.
-
-File: {filename}
+QUICK_STRUCTURED_PROMPT = """Security scan for: {filename}
 
 Code:
 ```
 {code}
 ```
 
-Provide a detailed security analysis covering:
+Find common vulnerabilities. Respond with ONLY this JSON format:
+{schema}
 
-1. **Input Validation**: Are user inputs properly validated and sanitized?
-2. **Authentication & Authorization**: Are there any access control issues?
-3. **Injection Flaws**: SQL injection, command injection, code injection, etc.
-4. **Cryptography**: Are cryptographic functions used correctly?
-5. **Error Handling**: Does error handling leak sensitive information?
-6. **Data Exposure**: Is sensitive data properly protected?
-7. **Dependencies**: Are there known vulnerable dependencies?
-
-For each issue found, specify:
-- Vulnerability type
-- Severity level (critical/high/medium/low)
-- Exact line number
-- Detailed explanation
-- Specific fix recommendation
-- Relevant CWE/OWASP reference
-
-Format your response clearly with sections for each vulnerability found."""
-
-
-QUICK_SCAN_PROMPT = """Quickly scan this code for common security issues:
-
-File: {filename}
-```
-{code}
-```
-
-List any security vulnerabilities found with:
-- Type
-- Severity
-- Line number
-- Brief fix suggestion
-
-Be concise but accurate."""
+Be concise but accurate. JSON only, no other text."""
 
 
 def get_prompt(prompt_type: str = "standard") -> str:
@@ -78,12 +60,32 @@ def get_prompt(prompt_type: str = "standard") -> str:
         prompt_type: Type of prompt ('standard', 'detailed', 'quick')
         
     Returns:
-        Prompt template string
+        Prompt template string (unformatted, with placeholders)
     """
     prompts = {
-        "standard": SECURITY_ANALYSIS_PROMPT,
-        "detailed": DETAILED_ANALYSIS_PROMPT,
-        "quick": QUICK_SCAN_PROMPT,
+        "standard": STRUCTURED_SECURITY_PROMPT,
+        "detailed": DETAILED_STRUCTURED_PROMPT,
+        "quick": QUICK_STRUCTURED_PROMPT,
     }
     
-    return prompts.get(prompt_type, SECURITY_ANALYSIS_PROMPT)
+    return prompts.get(prompt_type, STRUCTURED_SECURITY_PROMPT)
+
+
+def format_prompt(template: str, filename: str, code: str) -> str:
+    """
+    Format a prompt template with actual values.
+    
+    Args:
+        template: Prompt template string
+        filename: Name of file being analyzed
+        code: Source code content
+        
+    Returns:
+        Formatted prompt ready to send to AI
+    """
+    schema = get_schema_description()
+    return template.format(
+        filename=filename,
+        code=code,
+        schema=schema
+    )
