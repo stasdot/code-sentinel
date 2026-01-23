@@ -1,6 +1,6 @@
 # CODE SENTINEL
 
-AI-powered code vulnerability scanner using local and cloud-based AI models.
+AI-powered code vulnerability scanner in Python with support for local (Ollama) and cloud-based AI models.
 
 ## Features
 
