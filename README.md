@@ -25,7 +25,7 @@ AI-powered code vulnerability scanner in Python with support for local (Ollama) 
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/code-sentinel.git
+git clone https://github.com/stasdot/code-sentinel.git
 cd code-sentinel
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -74,7 +74,7 @@ Professional HTML report with:
 python main.py scan ./project --format html --output report.html
 ```
 
-![HTML Report Example](docs/html-report-preview.png)
+![HTML Report Example](<img width="1148" height="608" alt="Screenshot 2026-01-23 at 18 58 30" src="https://github.com/user-attachments/assets/a08e5f7c-b0d9-4db7-90d9-f6916b74d157" />)
 
 ### JSON Report
 Machine-readable format perfect for:
