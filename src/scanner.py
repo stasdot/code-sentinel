@@ -15,6 +15,7 @@ from .ai_client import create_client, AIClient
 from .prompts import get_prompt, format_prompt
 from .response_parser import ResponseParser
 from .models import ScanResult, Severity
+from .reporter import Reporter
 
 
 console = Console()

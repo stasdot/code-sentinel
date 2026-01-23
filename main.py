@@ -66,6 +66,18 @@ Examples:
         type=str,
         help="API key for cloud providers (or set via environment variable)"
     )
+    scan_parser.add_argument(
+        "--format",
+        type=str,
+        default="terminal",
+        choices=["terminal", "html", "json"],
+        help="Output format (default: terminal)"
+    )
+    scan_parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path (required for html/json formats)"
+    )
     
     args = parser.parse_args()
     
@@ -82,6 +94,11 @@ Examples:
             console.print(f"[red]✗ Path does not exist: {path}[/red]")
             sys.exit(1)
         
+        # Validate output requirements
+        if args.format in ["html", "json"] and not args.output:
+            console.print(f"[red]✗ --output required for {args.format} format[/red]")
+            sys.exit(1)
+        
         # Prepare client kwargs
         client_kwargs = {}
         if args.model:  # Only add model if specified
@@ -89,16 +106,29 @@ Examples:
         if args.api_key:
             client_kwargs["api_key"] = args.api_key
         
+        # Determine verbosity based on format
+        verbose = not args.quiet and args.format == "terminal"
+        
         results = scan(
             path=str(path),
             client_type=args.client,
             prompt_type=args.prompt,
-            verbose=not args.quiet,
+            verbose=verbose,
             **client_kwargs
         )
         
         if not results:
             sys.exit(1)
+        
+        # Generate report based on format
+        if args.format == "html":
+            from src.reporter import Reporter
+            output_file = Reporter.generate_html(results, args.output)
+            console.print(f"[green]✓ HTML report saved to: {output_file}[/green]")
+        elif args.format == "json":
+            from src.reporter import Reporter
+            output_file = Reporter.generate_json(results, args.output)
+            console.print(f"[green]✓ JSON report saved to: {output_file}[/green]")
         
         # Exit with error if any scan failed or critical/high vulnerabilities found
         failed = sum(1 for r in results if not r.success)
