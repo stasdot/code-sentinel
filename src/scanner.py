@@ -12,7 +12,9 @@ from rich.table import Table
 
 from .parser import FileParser
 from .ai_client import create_client, AIClient
-from .prompts import get_prompt
+from .prompts import get_prompt, format_prompt
+from .response_parser import ResponseParser
+from .models import ScanResult, Severity
 
 
 console = Console()
@@ -36,9 +38,10 @@ class CodeScanner:
         self.ai_client = ai_client
         self.file_parser = file_parser or FileParser()
         self.prompt_template = get_prompt(prompt_type)
-        self.results = []
+        self.parser = ResponseParser()
+        self.results: List[ScanResult] = []
     
-    def scan_file(self, file_path: Path) -> Dict[str, Any]:
+    def scan_file(self, file_path: Path) -> ScanResult:
         """
         Scan a single file for vulnerabilities.
         
@@ -46,36 +49,62 @@ class CodeScanner:
             file_path: Path to the file
             
         Returns:
-            Dictionary with scan results
+            ScanResult object with findings
         """
         # Read the file
         content = self.file_parser.read_file(file_path)
         
         if content is None:
-            return {
-                "file": str(file_path),
-                "success": False,
-                "error": "Failed to read file",
-                "response": None
-            }
+            return ScanResult(
+                file_path=str(file_path),
+                success=False,
+                error="Failed to read file",
+                model_used=self.ai_client.model
+            )
         
-        # Get file info
-        file_info = self.file_parser.get_file_info(file_path)
-        
-        # Analyze with AI
-        result = self.ai_client.analyze_code(
-            code=content,
+        # Format the prompt with actual values
+        prompt = format_prompt(
+            self.prompt_template,
             filename=file_path.name,
-            prompt_template=self.prompt_template
+            code=content
         )
         
-        # Combine file info with analysis result
-        result["file"] = str(file_path)
-        result["file_info"] = file_info
+        # Analyze with AI
+        ai_result = self.ai_client.analyze_code(
+            code=content,
+            filename=file_path.name,
+            prompt_template=prompt
+        )
+        
+        if not ai_result["success"]:
+            return ScanResult(
+                file_path=str(file_path),
+                success=False,
+                error=ai_result.get("error", "AI analysis failed"),
+                model_used=self.ai_client.model,
+                scan_time=ai_result.get("elapsed_time", 0.0)
+            )
+        
+        # Parse the AI response into structured data
+        result = self.parser.parse_response(
+            text=ai_result["response"],
+            file_path=str(file_path),
+            model_used=self.ai_client.model,
+            scan_time=ai_result["elapsed_time"]
+        )
+        
+        # If JSON parsing failed, try legacy parsing
+        if not result.success:
+            result = self.parser.parse_legacy_response(
+                text=ai_result["response"],
+                file_path=str(file_path),
+                model_used=self.ai_client.model,
+                scan_time=ai_result["elapsed_time"]
+            )
         
         return result
     
-    def scan_directory(self, path: str, verbose: bool = True) -> List[Dict[str, Any]]:
+    def scan_directory(self, path: str, verbose: bool = True) -> List[ScanResult]:
         """
         Scan all files in a directory.
         
@@ -84,7 +113,7 @@ class CodeScanner:
             verbose: Show progress output
             
         Returns:
-            List of scan results
+            List of ScanResult objects
         """
         self.results = []
         
@@ -134,8 +163,25 @@ class CodeScanner:
     
     def _display_summary(self):
         """Display a summary of scan results."""
-        successful = sum(1 for r in self.results if r.get("success"))
+        successful = sum(1 for r in self.results if r.success)
         failed = len(self.results) - successful
+        
+        # Count total vulnerabilities
+        total_vulns = sum(len(r.vulnerabilities) for r in self.results if r.success)
+        
+        # Count by severity
+        severity_counts = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 0,
+            Severity.MEDIUM: 0,
+            Severity.LOW: 0,
+            Severity.INFO: 0
+        }
+        
+        for result in self.results:
+            if result.success:
+                for vuln in result.vulnerabilities:
+                    severity_counts[vuln.severity] += 1
         
         # Create summary table
         table = Table(title="Scan Summary", show_header=True, header_style="bold magenta")
@@ -145,29 +191,66 @@ class CodeScanner:
         table.add_row("Total Files", str(len(self.results)))
         table.add_row("Successfully Analyzed", str(successful))
         table.add_row("Failed", str(failed))
+        table.add_row("Total Vulnerabilities", str(total_vulns))
+        
+        # Add severity breakdown
+        if total_vulns > 0:
+            table.add_row("", "")  # Blank row
+            table.add_row("By Severity:", "")
+            for severity in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]:
+                count = severity_counts[severity]
+                if count > 0:
+                    color = self._get_severity_color(severity)
+                    table.add_row(f"  {severity.value.title()}", f"[{color}]{count}[/{color}]")
         
         if successful > 0:
-            avg_time = sum(r.get("elapsed_time", 0) for r in self.results if r.get("success")) / successful
+            avg_time = sum(r.scan_time for r in self.results if r.success) / successful
+            table.add_row("", "")  # Blank row
             table.add_row("Avg Analysis Time", f"{avg_time:.2f}s")
         
         console.print()
         console.print(table)
         console.print()
         
-        # Show a few sample results
-        if successful > 0:
+        # Show summary message
+        if total_vulns > 0:
+            critical_high = severity_counts[Severity.CRITICAL] + severity_counts[Severity.HIGH]
+            if critical_high > 0:
+                console.print(Panel.fit(
+                    f"[bold red]⚠ Found {total_vulns} vulnerabilities ({critical_high} critical/high)[/bold red]\n"
+                    f"Review findings carefully and address high-severity issues first.",
+                    title="⚠️  Security Issues Found"
+                ))
+            else:
+                console.print(Panel.fit(
+                    f"[bold yellow]Found {total_vulns} vulnerabilities (all medium/low/info)[/bold yellow]\n"
+                    f"No critical or high severity issues detected.",
+                    title="Security Findings"
+                ))
+        else:
             console.print(Panel.fit(
-                "[bold green]✓ Scan completed successfully![/bold green]\n"
+                f"[bold green]✓ No vulnerabilities detected![/bold green]\n"
                 f"Analyzed {successful} files with AI model: {self.ai_client.model}",
-                title="Results"
+                title="✓ Clean Scan"
             ))
+    
+    def _get_severity_color(self, severity: Severity) -> str:
+        """Get color for severity level."""
+        colors = {
+            Severity.CRITICAL: "bright_red",
+            Severity.HIGH: "red",
+            Severity.MEDIUM: "yellow",
+            Severity.LOW: "blue",
+            Severity.INFO: "cyan"
+        }
+        return colors.get(severity, "white")
 
 
 def scan(path: str, 
          model: str = "codellama",
          client_type: str = "ollama",
          prompt_type: str = "standard",
-         verbose: bool = True) -> List[Dict[str, Any]]:
+         verbose: bool = True) -> List[ScanResult]:
     """
     Main entry point for scanning.
     
@@ -179,7 +262,7 @@ def scan(path: str,
         verbose: Show progress and results
         
     Returns:
-        List of scan results
+        List of ScanResult objects
     """
     # Create AI client
     if verbose:
@@ -209,7 +292,67 @@ def scan(path: str,
         prompt_type=prompt_type
     )
     
-    return scanner.scan_directory(path, verbose=verbose)
+    results = scanner.scan_directory(path, verbose=verbose)
+    
+    # Show detailed vulnerability information
+    if verbose and results:
+        _display_detailed_vulnerabilities(results)
+    
+    return results
+
+
+def _display_detailed_vulnerabilities(results: List[ScanResult]):
+    """Display detailed vulnerability information."""
+    console.print("\n[bold cyan]═══ Vulnerability Details ═══[/bold cyan]\n")
+    shown = 0
+    
+    for result in results:
+        if result.success and result.vulnerabilities:
+            console.print(f"[bold underline]📄 {result.file_path}[/bold underline]")
+            console.print(f"[dim]Scanned in {result.scan_time:.2f}s with {result.model_used}[/dim]\n")
+            
+            for i, vuln in enumerate(result.vulnerabilities, 1):
+                # Color based on severity
+                if vuln.severity == Severity.CRITICAL:
+                    color = "bright_red"
+                    icon = "🔴"
+                elif vuln.severity == Severity.HIGH:
+                    color = "red"
+                    icon = "🟠"
+                elif vuln.severity == Severity.MEDIUM:
+                    color = "yellow"
+                    icon = "🟡"
+                elif vuln.severity == Severity.LOW:
+                    color = "blue"
+                    icon = "🔵"
+                else:
+                    color = "cyan"
+                    icon = "ℹ️"
+                
+                console.print(f"[bold]{i}. [{color}]{icon} {vuln.type}[/{color}][/bold]")
+                console.print(f"   [dim]Severity:[/dim] [{color}]{vuln.severity.value.upper()}[/{color}]")
+                if vuln.line:
+                    console.print(f"   [dim]Line:[/dim] {vuln.line}")
+                if vuln.cwe_id:
+                    console.print(f"   [dim]CWE:[/dim] {vuln.cwe_id}")
+                console.print(f"   [dim]Confidence:[/dim] {vuln.confidence:.0%}")
+                console.print(f"\n   [bold]Description:[/bold]")
+                console.print(f"   {vuln.description}")
+                if vuln.code_snippet:
+                    console.print(f"\n   [bold]Code Snippet:[/bold]")
+                    console.print(f"   [dim]{vuln.code_snippet}[/dim]")
+                console.print(f"\n   [bold green]✓ Recommendation:[/bold green]")
+                console.print(f"   {vuln.recommendation}\n")
+            
+            shown += 1
+            if shown >= 5:  # Limit to 5 files to avoid too much output
+                remaining = len([r for r in results if r.success and r.vulnerabilities]) - shown
+                if remaining > 0:
+                    console.print(f"[dim]... and {remaining} more files with vulnerabilities[/dim]\n")
+                break
+    
+    if shown == 0:
+        console.print("[dim]No vulnerabilities found in scanned files.[/dim]\n")
 
 
 if __name__ == "__main__":
@@ -226,9 +369,51 @@ if __name__ == "__main__":
     
     # Show a sample of results
     if results:
-        console.print("\n[bold cyan]Sample Analysis Results:[/bold cyan]\n")
-        for i, result in enumerate(results[:3], 1):  # Show first 3
-            if result.get("success"):
-                console.print(f"[bold]{i}. {result['file']}[/bold]")
-                response_preview = result['response'][:300] + "..." if len(result['response']) > 300 else result['response']
-                console.print(f"[dim]{response_preview}[/dim]\n")
+        console.print("\n[bold cyan]═══ Vulnerability Details ═══[/bold cyan]\n")
+        shown = 0
+        for result in results:
+            if result.success and result.vulnerabilities:
+                console.print(f"[bold underline]📄 {result.file_path}[/bold underline]")
+                console.print(f"[dim]Scanned in {result.scan_time:.2f}s with {result.model_used}[/dim]\n")
+                
+                for i, vuln in enumerate(result.vulnerabilities, 1):
+                    # Color based on severity
+                    if vuln.severity == Severity.CRITICAL:
+                        color = "bright_red"
+                        icon = "🔴"
+                    elif vuln.severity == Severity.HIGH:
+                        color = "red"
+                        icon = "🟠"
+                    elif vuln.severity == Severity.MEDIUM:
+                        color = "yellow"
+                        icon = "🟡"
+                    elif vuln.severity == Severity.LOW:
+                        color = "blue"
+                        icon = "🔵"
+                    else:
+                        color = "cyan"
+                        icon = "ℹ️"
+                    
+                    console.print(f"[bold]{i}. [{color}]{icon} {vuln.type}[/{color}][/bold]")
+                    console.print(f"   [dim]Severity:[/dim] [{color}]{vuln.severity.value.upper()}[/{color}]")
+                    if vuln.line:
+                        console.print(f"   [dim]Line:[/dim] {vuln.line}")
+                    if vuln.cwe_id:
+                        console.print(f"   [dim]CWE:[/dim] {vuln.cwe_id}")
+                    console.print(f"   [dim]Confidence:[/dim] {vuln.confidence:.0%}")
+                    console.print(f"\n   [bold]Description:[/bold]")
+                    console.print(f"   {vuln.description}")
+                    console.print(f"\n   [bold]Code Snippet:[/bold]")
+                    console.print(f"   [dim]{vuln.code_snippet}[/dim]")
+                    console.print(f"\n   [bold green]✓ Recommendation:[/bold green]")
+                    console.print(f"   {vuln.recommendation}\n")
+                
+                shown += 1
+                if shown >= 5:  # Limit to 5 files to avoid too much output
+                    remaining = len([r for r in results if r.success and r.vulnerabilities]) - shown
+                    if remaining > 0:
+                        console.print(f"[dim]... and {remaining} more files with vulnerabilities[/dim]\n")
+                    break
+        
+        if shown == 0:
+            console.print("[dim]No vulnerabilities found in scanned files.[/dim]\n")

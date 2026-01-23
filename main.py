@@ -88,9 +88,19 @@ Examples:
         if not results:
             sys.exit(1)
         
-        # Exit with error if any scan failed
-        failed = sum(1 for r in results if not r.get("success"))
+        # Exit with error if any scan failed or critical/high vulnerabilities found
+        failed = sum(1 for r in results if not r.success)
         if failed > 0:
+            sys.exit(1)
+        
+        # Check for critical/high severity vulnerabilities
+        from src.models import Severity
+        critical_high = sum(
+            1 for r in results 
+            for v in r.vulnerabilities 
+            if v.severity in [Severity.CRITICAL, Severity.HIGH]
+        )
+        if critical_high > 0:
             sys.exit(1)
 
 

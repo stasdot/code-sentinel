@@ -130,13 +130,13 @@ class OllamaClient(AIClient):
         Args:
             code: Source code to analyze
             filename: Name of the file
-            prompt_template: Prompt template with {code} and {filename} placeholders
+            prompt_template: Fully formatted prompt (already contains code and filename)
             
         Returns:
             Dictionary with analysis results
         """
-        # Format the prompt
-        prompt = prompt_template.format(code=code, filename=filename)
+        # Use the prompt as-is (it's already formatted by the scanner)
+        prompt = prompt_template
         
         start_time = time.time()
         
@@ -147,6 +147,7 @@ class OllamaClient(AIClient):
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
+                    "format": "json",  # Force JSON output
                     "options": {
                         "temperature": 0.1,  # Lower temperature for more focused analysis
                         "top_p": 0.9,
