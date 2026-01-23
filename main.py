@@ -39,14 +39,14 @@ Examples:
     scan_parser.add_argument(
         "--model",
         type=str,
-        default="codellama",
-        help="AI model to use (default: codellama)"
+        default=None,  # Let scanner choose default based on client
+        help="AI model to use (default varies by client)"
     )
     scan_parser.add_argument(
         "--client",
         type=str,
         default="ollama",
-        choices=["ollama"],
+        choices=["ollama", "groq", "huggingface", "hf"],
         help="AI client type (default: ollama)"
     )
     scan_parser.add_argument(
@@ -60,6 +60,11 @@ Examples:
         "--quiet",
         action="store_true",
         help="Minimal output"
+    )
+    scan_parser.add_argument(
+        "--api-key",
+        type=str,
+        help="API key for cloud providers (or set via environment variable)"
     )
     
     args = parser.parse_args()
@@ -77,12 +82,19 @@ Examples:
             console.print(f"[red]✗ Path does not exist: {path}[/red]")
             sys.exit(1)
         
+        # Prepare client kwargs
+        client_kwargs = {}
+        if args.model:  # Only add model if specified
+            client_kwargs["model"] = args.model
+        if args.api_key:
+            client_kwargs["api_key"] = args.api_key
+        
         results = scan(
             path=str(path),
-            model=args.model,
             client_type=args.client,
             prompt_type=args.prompt,
-            verbose=not args.quiet
+            verbose=not args.quiet,
+            **client_kwargs
         )
         
         if not results:

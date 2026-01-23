@@ -1,0 +1,82 @@
+# CODE SENTINEL Configuration
+
+# AI Model Settings
+models:
+  # Local models (Ollama)
+  local:
+    default: "codellama"
+    alternatives:
+      - "mistral"
+      - "llama3.2"
+      - "qwen2.5-coder"
+  
+  # Cloud models (Groq)
+  groq:
+    default: "llama-3.3-70b-versatile"
+    alternatives:
+      - "llama-3.1-70b-versatile"
+      - "mixtral-8x7b-32768"
+      - "gemma2-9b-it"
+  
+  # Hugging Face models
+  huggingface:
+    default: "meta-llama/Llama-3.2-3B-Instruct"
+    alternatives:
+      - "mistralai/Mistral-7B-Instruct-v0.2"
+      - "google/gemma-7b-it"
+
+# Scanning Options
+scan:
+  # Severity threshold (only report this level and above)
+  severity_threshold: "info"  # options: critical, high, medium, low, info
+  
+  # File types to scan
+  file_types:
+    - ".py"
+    - ".js"
+    - ".jsx"
+    - ".ts"
+    - ".tsx"
+    - ".java"
+    - ".go"
+    - ".php"
+    - ".rb"
+    - ".cs"
+    - ".cpp"
+    - ".c"
+    - ".rs"
+  
+  # Directories and patterns to ignore
+  ignore_patterns:
+    - "node_modules"
+    - ".git"
+    - "__pycache__"
+    - "venv"
+    - "env"
+    - ".venv"
+    - "dist"
+    - "build"
+    - ".pytest_cache"
+    - "coverage"
+  
+  # Prompt type (standard, detailed, quick)
+  default_prompt: "standard"
+
+# API Configuration
+# Set these as environment variables for security:
+# - GROQ_API_KEY
+# - HUGGINGFACE_API_KEY
+api:
+  timeout: 120  # seconds
+  max_retries: 3
+
+# Output Settings
+output:
+  # Show progress bars
+  verbose: true
+  
+  # Default output format (terminal, json, html, markdown)
+  format: "terminal"
+  
+  # Color output
+  colors: true
