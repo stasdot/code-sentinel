@@ -17,6 +17,7 @@ from .response_parser import ResponseParser
 from .models import ScanResult, Severity
 from .reporter import Reporter
 from .context_manager import ContextManager
+from .cache_manager import CacheManager
 
 
 console = Console()
@@ -29,7 +30,8 @@ class CodeScanner:
                  ai_client: AIClient,
                  file_parser: Optional[FileParser] = None,
                  prompt_type: str = "standard",
-                 use_context_manager: bool = True):
+                 use_context_manager: bool = True,
+                 use_cache: bool = True):
         """
         Initialize the code scanner.
         
@@ -38,10 +40,12 @@ class CodeScanner:
             file_parser: File parser instance (creates default if None)
             prompt_type: Type of prompt to use ('standard', 'detailed', 'quick')
             use_context_manager: Enable chunking and context management
+            use_cache: Enable caching of scan results
         """
         self.ai_client = ai_client
         self.file_parser = file_parser or FileParser()
         self.prompt_template = get_prompt(prompt_type)
+        self.prompt_type = prompt_type
         self.parser = ResponseParser()
         self.results: List[ScanResult] = []
         
@@ -51,6 +55,13 @@ class CodeScanner:
             self.context_manager = ContextManager(model_name=ai_client.model)
         else:
             self.context_manager = None
+        
+        # Cache manager for storing results
+        self.use_cache = use_cache
+        if use_cache:
+            self.cache_manager = CacheManager()
+        else:
+            self.cache_manager = None
     
     def scan_file(self, file_path: Path) -> ScanResult:
         """
@@ -62,6 +73,16 @@ class CodeScanner:
         Returns:
             ScanResult object with findings
         """
+        # Check cache first
+        if self.cache_manager:
+            cached_result = self.cache_manager.get_cached_result(
+                str(file_path),
+                self.ai_client.model,
+                self.prompt_type
+            )
+            if cached_result:
+                return cached_result
+        
         # Read the file
         content = self.file_parser.read_file(file_path)
         
@@ -75,9 +96,20 @@ class CodeScanner:
         
         # Check if we need to chunk the file
         if self.context_manager and self.context_manager.needs_chunking(content):
-            return self._scan_file_chunked(file_path, content)
+            result = self._scan_file_chunked(file_path, content)
         else:
-            return self._scan_file_single(file_path, content)
+            result = self._scan_file_single(file_path, content)
+        
+        # Cache the result
+        if self.cache_manager and result.success:
+            self.cache_manager.cache_result(
+                str(file_path),
+                self.ai_client.model,
+                self.prompt_type,
+                result
+            )
+        
+        return result
     
     def _scan_file_single(self, file_path: Path, content: str) -> ScanResult:
         """Scan a file as a single unit."""
@@ -193,6 +225,7 @@ class CodeScanner:
             List of ScanResult objects
         """
         self.results = []
+        cache_hits = 0
         
         # Discover files
         if verbose:
@@ -222,10 +255,23 @@ class CodeScanner:
             )
             
             for file_path in files:
+                # Check if cached
+                was_cached = False
+                if self.cache_manager:
+                    cached = self.cache_manager.get_cached_result(
+                        str(file_path),
+                        self.ai_client.model,
+                        self.prompt_type
+                    )
+                    if cached:
+                        was_cached = True
+                        cache_hits += 1
+                
                 if verbose:
+                    status = "💾 Cached" if was_cached else "Scanning"
                     progress.update(
                         task, 
-                        description=f"[cyan]Scanning: {file_path.name}"
+                        description=f"[cyan]{status}: {file_path.name}"
                     )
                 
                 result = self.scan_file(file_path)
@@ -234,11 +280,11 @@ class CodeScanner:
                 progress.advance(task)
         
         if verbose:
-            self._display_summary()
+            self._display_summary(cache_hits)
         
         return self.results
     
-    def _display_summary(self):
+    def _display_summary(self, cache_hits: int = 0):
         """Display a summary of scan results."""
         successful = sum(1 for r in self.results if r.success)
         failed = len(self.results) - successful
@@ -267,6 +313,8 @@ class CodeScanner:
         
         table.add_row("Total Files", str(len(self.results)))
         table.add_row("Successfully Analyzed", str(successful))
+        if cache_hits > 0:
+            table.add_row("From Cache", f"[yellow]{cache_hits}[/yellow]")
         table.add_row("Failed", str(failed))
         table.add_row("Total Vulnerabilities", str(total_vulns))
         
@@ -327,6 +375,7 @@ def scan(path: str,
          client_type: str = "ollama",
          prompt_type: str = "standard",
          verbose: bool = True,
+         use_cache: bool = True,
          **client_kwargs) -> List[ScanResult]:
     """
     Main entry point for scanning.
@@ -383,7 +432,8 @@ def scan(path: str,
     # Create scanner and run
     scanner = CodeScanner(
         ai_client=ai_client,
-        prompt_type=prompt_type
+        prompt_type=prompt_type,
+        use_cache=use_cache
     )
     
     results = scanner.scan_directory(path, verbose=verbose)
