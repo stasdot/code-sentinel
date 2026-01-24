@@ -16,6 +16,7 @@ from .prompts import get_prompt, format_prompt
 from .response_parser import ResponseParser
 from .models import ScanResult, Severity
 from .reporter import Reporter
+from .context_manager import ContextManager
 
 
 console = Console()
@@ -27,7 +28,8 @@ class CodeScanner:
     def __init__(self, 
                  ai_client: AIClient,
                  file_parser: Optional[FileParser] = None,
-                 prompt_type: str = "standard"):
+                 prompt_type: str = "standard",
+                 use_context_manager: bool = True):
         """
         Initialize the code scanner.
         
@@ -35,12 +37,20 @@ class CodeScanner:
             ai_client: AI client instance for code analysis
             file_parser: File parser instance (creates default if None)
             prompt_type: Type of prompt to use ('standard', 'detailed', 'quick')
+            use_context_manager: Enable chunking and context management
         """
         self.ai_client = ai_client
         self.file_parser = file_parser or FileParser()
         self.prompt_template = get_prompt(prompt_type)
         self.parser = ResponseParser()
         self.results: List[ScanResult] = []
+        
+        # Context manager for large files
+        self.use_context_manager = use_context_manager
+        if use_context_manager:
+            self.context_manager = ContextManager(model_name=ai_client.model)
+        else:
+            self.context_manager = None
     
     def scan_file(self, file_path: Path) -> ScanResult:
         """
@@ -63,6 +73,14 @@ class CodeScanner:
                 model_used=self.ai_client.model
             )
         
+        # Check if we need to chunk the file
+        if self.context_manager and self.context_manager.needs_chunking(content):
+            return self._scan_file_chunked(file_path, content)
+        else:
+            return self._scan_file_single(file_path, content)
+    
+    def _scan_file_single(self, file_path: Path, content: str) -> ScanResult:
+        """Scan a file as a single unit."""
         # Format the prompt with actual values
         prompt = format_prompt(
             self.prompt_template,
@@ -102,6 +120,64 @@ class CodeScanner:
                 model_used=self.ai_client.model,
                 scan_time=ai_result["elapsed_time"]
             )
+        
+        return result
+    
+    def _scan_file_chunked(self, file_path: Path, content: str) -> ScanResult:
+        """Scan a large file in chunks."""
+        language = file_path.suffix
+        chunks = self.context_manager.chunk_code(content, str(file_path), language)
+        
+        console.print(f"  [yellow]Large file detected, scanning in {len(chunks)} chunks...[/yellow]")
+        
+        all_vulnerabilities = []
+        total_scan_time = 0.0
+        
+        for chunk in chunks:
+            # Build context with imports
+            code_with_context = self.context_manager.build_context(chunk)
+            
+            # Format the prompt
+            prompt = format_prompt(
+                self.prompt_template,
+                filename=f"{file_path.name} (chunk {chunk.chunk_index + 1}/{chunk.total_chunks})",
+                code=code_with_context
+            )
+            
+            # Analyze chunk
+            ai_result = self.ai_client.analyze_code(
+                code=code_with_context,
+                filename=file_path.name,
+                prompt_template=prompt
+            )
+            
+            total_scan_time += ai_result.get("elapsed_time", 0.0)
+            
+            if ai_result["success"]:
+                # Parse response
+                chunk_result = self.parser.parse_response(
+                    text=ai_result["response"],
+                    file_path=str(file_path),
+                    model_used=self.ai_client.model,
+                    scan_time=ai_result["elapsed_time"]
+                )
+                
+                if chunk_result.success:
+                    # Adjust line numbers based on chunk offset
+                    for vuln in chunk_result.vulnerabilities:
+                        if vuln.line:
+                            vuln.line += chunk.start_line - 1
+                    
+                    all_vulnerabilities.extend(chunk_result.vulnerabilities)
+        
+        # Combine results
+        result = ScanResult(
+            file_path=str(file_path),
+            vulnerabilities=all_vulnerabilities,
+            scan_time=total_scan_time,
+            model_used=self.ai_client.model,
+            success=True
+        )
         
         return result
     
@@ -358,7 +434,13 @@ def _display_detailed_vulnerabilities(results: List[ScanResult]):
                 console.print(f"   {vuln.description}")
                 if vuln.code_snippet:
                     console.print(f"\n   [bold]Code Snippet:[/bold]")
-                    console.print(f"   [dim]{vuln.code_snippet}[/dim]")
+                    # Add arrow pointer to the code
+                    snippet_lines = vuln.code_snippet.split('\n')
+                    for idx, line in enumerate(snippet_lines):
+                        if idx == 0 and vuln.line:  # First line gets the arrow
+                            console.print(f"   [{color}]Line {vuln.line} → [/{color}][dim]{line}[/dim]")
+                        else:
+                            console.print(f"   [dim]{line}[/dim]")
                 console.print(f"\n   [bold green]✓ Recommendation:[/bold green]")
                 console.print(f"   {vuln.recommendation}\n")
             

@@ -378,7 +378,7 @@ class Reporter:
 """
                         if vuln.code_snippet:
                             html += f"""
-                    <div class="code-snippet">{Reporter._escape_html(vuln.code_snippet)}</div>
+                    <div class="code-snippet">{Reporter._format_code_with_pointer(vuln.code_snippet, vuln.line)}</div>
 """
                         html += f"""
                     <div class="recommendation">
@@ -452,3 +452,28 @@ class Reporter:
                 .replace(">", "&gt;")
                 .replace('"', "&quot;")
                 .replace("'", "&#39;"))
+    
+    @staticmethod
+    def _format_code_with_pointer(code_snippet: str, line_number: Optional[int]) -> str:
+        """Format code snippet with line numbers and pointer arrow."""
+        if not line_number:
+            return Reporter._escape_html(code_snippet)
+        
+        lines = code_snippet.split('\n')
+        formatted_lines = []
+        
+        for i, line in enumerate(lines, start=1):
+            escaped_line = Reporter._escape_html(line)
+            # Add pointer arrow to the vulnerable line
+            if len(lines) == 1:
+                # Single line snippet - add arrow before it
+                formatted_lines.append(f'<span style="color: #ef4444;">→ </span>{escaped_line}')
+            else:
+                # Multi-line snippet - show line numbers
+                line_num = f'{line_number + i - 1:3d}'
+                if i == 1:  # First line is typically the vulnerable one
+                    formatted_lines.append(f'<span style="color: #ef4444;">{line_num} → </span>{escaped_line}')
+                else:
+                    formatted_lines.append(f'<span style="color: #6b7280;">{line_num}   </span>{escaped_line}')
+        
+        return '\n'.join(formatted_lines)
