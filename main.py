@@ -78,6 +78,11 @@ Examples:
         type=str,
         help="Output file path (required for html/json formats)"
     )
+    scan_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching (force fresh scan)"
+    )
     
     args = parser.parse_args()
     
@@ -114,6 +119,7 @@ Examples:
             client_type=args.client,
             prompt_type=args.prompt,
             verbose=verbose,
+            use_cache=not args.no_cache,
             **client_kwargs
         )
         
